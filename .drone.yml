@@ -1,0 +1,81 @@
+kind: pipeline
+name: default
+type: docker
+
+steps:
+  - name: build-and-push-api-image
+    image: docker:dind
+    volumes:
+      - name: dockersock
+        path: /var/run
+    environment:
+      DOCKER_REGISTRY:
+        from_secret: docker_registry
+      DOCKER_USERNAME:
+        from_secret: docker_username
+      DOCKER_PASSWORD:
+        from_secret: docker_password
+      IMAGE:
+        from_secret: image
+    commands:
+      - sleep 5 # give docker enough time to start
+      - echo $DOCKER_PASSWORD | docker login --username $DOCKER_USERNAME --password-stdin $DOCKER_REGISTRY
+      - DOCKER_BUILDKIT=1 docker build -t $DOCKER_REGISTRY/$IMAGE:latest api/
+      - docker push --all-tags $DOCKER_REGISTRY/$IMAGE
+
+  - name: deploy-api
+    image: appleboy/drone-ssh
+    settings:
+      host:
+        - societaire.entrelac.coop
+      username:
+        from_secret: ssh_username
+      key:
+        from_secret: ssh_key
+      script:
+        - cd /srv/entrelac/
+        - docker-compose pull
+        - docker-compose up -d
+    depends_on:
+      - build-and-push-api-image
+
+  - name: build-app
+    image: node:18-alpine
+    commands:
+      - cd app
+      - npm ci
+      - npm run check
+      - npm run build
+
+  - name: deploy-app
+    image: drillster/drone-rsync
+    settings:
+      hosts:
+        - societaire.entrelac.coop
+      source: app/dist/
+      target: /srv/entrelac/app/
+      args: --delete
+      user:
+        from_secret: ssh_username
+      key:
+        from_secret: ssh_key
+    depends_on:
+      - build-app
+
+services:
+  - name: docker
+    image: docker:dind
+    privileged: true
+    volumes:
+      - name: dockersock
+        path: /var/run
+
+volumes:
+  - name: dockersock
+    temp: {}
+
+trigger:
+  branch:
+    - main
+  event:
+    - push

@@ -1,0 +1,1 @@
+ALTER TABLE users ADD COLUMN reason TEXT DEFAULT null;
